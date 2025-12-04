@@ -24,7 +24,8 @@ class BenchmarkSession:
 
     @staticmethod
     def get_runs_dirname(bench_name: str, bench_date: datetime, amount: str) -> str:
-        return f"{os.getcwd()}/runs/{bench_name}-{amount}-{bench_date.strftime('%Y%m%d%H%M%S')}"
+        #return f"{os.getcwd()}/runs/{bench_name}-{amount}-{bench_date.strftime('%Y%m%d%H%M%S')}"
+        return f"{os.getcwd()}/runs/{bench_name}-{amount}"
 
     def __init__(self, bench_name: str, amount: str, session_path: str = None):
         self.logger = get_logger(f"BenchmarkSession:{bench_name}-{amount}")
@@ -255,7 +256,8 @@ class BenchmarkSession:
         self.mysqld.stop()
 
 
-        os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
+        # os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
+        os.system(f"mv -v /var/lib/mysql/server-binlog.* {self.session_path}/")
         os.system(f"mkdir -p {self.session_path}/procdef")
         os.system(f"cp -rv {os.getcwd()}/procdefs/{self.bench_name}/* {self.session_path}/procdef/")
 

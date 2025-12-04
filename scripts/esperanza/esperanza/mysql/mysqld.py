@@ -11,7 +11,8 @@ from esperanza.utils.osutils import get_current_user
 from esperanza.utils.logger import get_logger
 
 MYSQL_DEFAULT_BASE_PATH = f"{os.getcwd()}/cache/mysql/{MYSQL_DISTRIBUTION_NAME}"
-MYSQL_DEFAULT_CONF_PATH = f"{os.getcwd()}/mysql_conf/my.cnf"
+#MYSQL_DEFAULT_CONF_PATH = f"{os.getcwd()}/mysql_conf/my.cnf"
+MYSQL_DEFAULT_CONF_PATH = "/etc/mysql/mysql.conf.d/mysqld.cnf"
 
 class MySQLDaemon:
     """
@@ -96,7 +97,7 @@ class MySQLDaemon:
                 "-uroot",
                 "-ppassword",
                 "-R",
-                "--skip-opt",
+                # "--skip-opt",
                 "--create-options",
                 "--extended-insert",
                 "--flush-logs",
@@ -144,7 +145,7 @@ class MySQLDaemon:
         time.sleep(5)
 
 
-        retval = self.__exec__(self.bin_for("mysql"), [
+        """retval = self.__exec__(self.bin_for("mysql"), [
             "-h127.0.0.1",
             f"--port={self.port}",
             "-uroot",
@@ -164,7 +165,7 @@ class MySQLDaemon:
 
         # send SIGTERM to the daemon
         handle.send_signal(15)
-        handle.wait()
+        handle.wait()"""
 
         self.logger.info("MySQL data directory is ready")
 

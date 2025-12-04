@@ -222,7 +222,7 @@ if __name__ == "__main__":
 
     session = BenchmarkSession("epinions", "1m")
     logger = session.logger
-    session.prepare()
+    #session.prepare()
 
     # statelogd를 실행해서 binary log에서 statelog를 생성한다.
     session.run_statelogd(['-k', 'item2.i_id,useracct.u_id,review.i_id,review.u_id,trust.source_u_id,trust.target_u_id'])
@@ -240,18 +240,18 @@ if __name__ == "__main__":
 
     # state change를 행한다
     # 1. 최소 (상태전환 쿼리를 1개만 선택)
-    perform_state_change(session, [0], do_extra_replay_st=True, do_table_diff=False)
+    perform_state_change(session, [2], do_extra_replay_st=True, do_table_diff=False)
 
     # 2. 1% 정도
-    rollback_gids = decide_rollback_gids(session, 0.01)
-    perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=False)
+    #rollback_gids = decide_rollback_gids(session, 0.01)
+    #perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=False)
 
     # 3. 10% 정도
-    rollback_gids = decide_rollback_gids(session, 0.1)
-    perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=False)
+    #rollback_gids = decide_rollback_gids(session, 0.1)
+    #perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=False)
 
     # 4. 100%
-    perform_full_replay(session)
+    # perform_full_replay(session)
 
 
     logger.info("stopping mysqld...")
