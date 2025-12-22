@@ -321,7 +321,7 @@ class BenchmarkSession:
         retval = subprocess.call([
             'mysql',
             '-h127.0.0.1',
-            '-uroot',
+            '-uadmin',
             '-ppassword',
             db_name,
             '-B', '--silent', '--raw',

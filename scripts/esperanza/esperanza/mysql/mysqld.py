@@ -44,7 +44,8 @@ class MySQLDaemon:
         """
         executes a binary with the given arguments. (like execvp)
         """
-        return subprocess.call([binary] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        #return subprocess.call([binary] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.call([binary] + args, stdout=subprocess.DEVNULL)
 
     def __exec_nonblock__(self, binary: str, args: list[str]) -> subprocess.Popen:
         """
@@ -94,14 +95,14 @@ class MySQLDaemon:
             [
                 "-h127.0.0.1",
                 f"--port={self.port}",
-                "-uroot",
+                "-uadmin",
                 "-ppassword",
                 "-R",
-                # "--skip-opt",
+                "--skip-opt",
                 "--create-options",
                 "--extended-insert",
                 "--flush-logs",
-                # "--single-transaction",
+                #"--single-transaction",
                 "--lock-all-tables",
                 "--complete-insert",
                 database,
@@ -110,7 +111,7 @@ class MySQLDaemon:
         )
 
         if retval != 0:
-            raise Exception(f"failed to dump database '{database}'")
+            raise Exception(f"failed to dump database '{database}', {retval}")
 
     def prepare(self):
         """
@@ -145,15 +146,13 @@ class MySQLDaemon:
         time.sleep(5)
 
 
-        """retval = self.__exec__(self.bin_for("mysql"), [
+        retval = self.__exec__(self.bin_for("mysql"), [
             "-h127.0.0.1",
             f"--port={self.port}",
-            "-uroot",
-            "--skip-password",
-            "-e", "ALTER USER 'root'@'localhost' IDENTIFIED BY 'password';"
+            "-uadmin",
+            "-ppassword",
+            "-e", "DROP DATABASE IF EXISTS benchbase;"
                   "CREATE DATABASE benchbase;"
-                  "CREATE USER 'admin'@'localhost' IDENTIFIED BY 'password';"
-                  "GRANT ALL PRIVILEGES ON *.* TO 'admin'@'localhost';"
                   "FLUSH PRIVILEGES;"
         ])
 
@@ -165,7 +164,7 @@ class MySQLDaemon:
 
         # send SIGTERM to the daemon
         handle.send_signal(15)
-        handle.wait()"""
+        handle.wait()
 
         self.logger.info("MySQL data directory is ready")
 
@@ -189,6 +188,7 @@ class MySQLDaemon:
             f"--basedir={self.base_path}",
             f"--datadir={self.data_path}",
             f"--port={self.port}",
+            "--max_connections=2000"
         ])
 
         return True
