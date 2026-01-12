@@ -11,8 +11,8 @@ from esperanza.utils.osutils import get_current_user
 from esperanza.utils.logger import get_logger
 
 MYSQL_DEFAULT_BASE_PATH = f"{os.getcwd()}/cache/mysql/{MYSQL_DISTRIBUTION_NAME}"
-#MYSQL_DEFAULT_CONF_PATH = f"{os.getcwd()}/mysql_conf/my.cnf"
-MYSQL_DEFAULT_CONF_PATH = "/etc/mysql/mysql.conf.d/mysqld.cnf"
+MYSQL_DEFAULT_CONF_PATH = f"{os.getcwd()}/mysql_conf/my.cnf"
+#MYSQL_DEFAULT_CONF_PATH = "/etc/mysql/mysql.conf.d/mysqld.cnf"
 
 class MySQLDaemon:
     """
@@ -90,28 +90,28 @@ class MySQLDaemon:
             return
 
         self.logger.info(f"dumping database '{database}' to '{output}'...")
-        retval = self.__exec__(
-            self.bin_for("mysqldump"),
-            [
-                "-h127.0.0.1",
-                f"--port={self.port}",
-                "-uadmin",
-                "-ppassword",
-                "-R",
-                "--skip-opt",
-                "--create-options",
-                "--extended-insert",
-                "--flush-logs",
-                #"--single-transaction",
-                "--lock-all-tables",
-                "--complete-insert",
-                database,
-                f"--result-file={output}"
-            ]
-        )
+        
+        mysqldump_bin = "/usr/bin/mysqldump"
+
+        args = [
+            "--defaults-file=/etc/mysql/mysql.conf.d/mysqld.cnf", 
+            "--user=root", 
+            "--password=password",
+            "-R",
+            # "--skip-opt",
+            "--create-options",
+            "--extended-insert",
+            "--flush-logs",
+            # "--single-transaction",
+            "--lock-all-tables",
+            "--complete-insert",
+            database,
+            f"--result-file={output}"
+        ]
+        retval = self.__exec__(mysqldump_bin, args)
 
         if retval != 0:
-            raise Exception(f"failed to dump database '{database}', {retval}")
+            raise Exception(f"failed to dump database '{database}'")
 
     def prepare(self):
         """
@@ -133,7 +133,7 @@ class MySQLDaemon:
             f"--datadir={self.data_path}",
         ])
 
-        self.logger.info("setting root password to 'password'...")
+        #self.logger.info("setting root password to 'password'...")
 
         handle = self.__exec_nonblock__(mysqld, [
             f"--defaults-file={self.config_path}",
@@ -145,14 +145,13 @@ class MySQLDaemon:
 
         time.sleep(5)
 
-
         retval = self.__exec__(self.bin_for("mysql"), [
             "-h127.0.0.1",
             f"--port={self.port}",
             "-uroot",
             "-ppassword",
-            "-e", "DROP DATABASE IF EXISTS benchbase;"
-                  "CREATE DATABASE benchbase;"
+            "-e", "DROP DATABASE IF EXISTS offchaindb;"
+                  "CREATE DATABASE offchaindb;"
                   "FLUSH PRIVILEGES;"
         ])
 

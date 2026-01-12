@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 import fcntl
-from esperanza.mysql.mysqld import MySQLDaemon
+from esperanza.mysql.mysqld_cfp import MySQLDaemon
 from esperanza.utils.logger import get_logger
 
 
@@ -50,6 +50,7 @@ class BenchmarkSession:
 
         signal.signal(signal.SIGINT, sigint_handler)
 
+
     def run_benchbase(self, args: list[str]):
         """
         runs benchbase with the given arguments.
@@ -61,14 +62,10 @@ class BenchmarkSession:
         os.chdir(benchbase_home)
 
         handle = subprocess.Popen(
-            [f"{benchbase_home}/run-mariadb"] + args,
+            [f"{benchbase_home}/run-mysql"] + args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE
         )
-
-        # Q: should i use handle.communicate() instead of handle.stdout.read()?
-        # A: no, because handle.communicate() waits for the process to finish, which is not what we want.
-        #    we want to read the output while the process is running.
 
         with open(f"{self.session_path}/benchbase.log", 'w') as f:
             while True:
@@ -89,11 +86,39 @@ class BenchmarkSession:
         if retval != 0:
             raise Exception("failed to run benchbase")
 
+
+    def run_prepare(self):
+
+        application_home = os.environ['APP_HOME']
+
+        cwd = os.getcwd()
+
+        subprocess.Popen(
+            ["python3", f"{cwd}/setting/create_tb.py"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE
+        )
+
+        subprocess.Popen(
+            ["python3", f"{cwd}/setting/del_and_insert.py"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE
+        )
+
+        """subprocess.call(
+            ['python3', f"{cwd}/application/calculation.py"],
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL  
+        )"""
+
+        #os.chdir(cwd)
+
     def run_statelogd(self, args: list[str] = []):
         """
         runs statelogd.
         """
         ultraverse_home = os.environ['ULTRAVERSE_HOME']
+        #ultraverse_home = "/root/ultraverse/build/src"
 
         self.logger.info("running statelogd...")
 
@@ -102,9 +127,11 @@ class BenchmarkSession:
 
         handle = subprocess.Popen([
             f"{ultraverse_home}/statelogd",
-
             '-b', 'server-binlog.index',
-            '-o', 'benchbase',
+            '-o', 'offchaindb',
+            '-M',
+            '-G', 
+            '-Q',
             '-n'
         ] + args, stderr=subprocess.PIPE)
 
@@ -221,7 +248,7 @@ class BenchmarkSession:
         self.mysqld.start()
         time.sleep(5)
 
-        self.run_benchbase([self.bench_name, 'mariadb', self.amount, 'prepare'])
+        self.run_prepare()
         time.sleep(5)
 
         self.mysqld.stop()
@@ -231,7 +258,7 @@ class BenchmarkSession:
 
         # checkpoint
         self.logger.info("dumping database...")
-        self.mysqld.mysqldump("benchbase", f"{self.session_path}/dbdump.sql")
+        self.mysqld.mysqldump("offchaindb", f"{self.session_path}/dbdump.sql")
 
         self.mysqld.stop()
 
@@ -241,7 +268,7 @@ class BenchmarkSession:
         self.mysqld.start()
         time.sleep(5)
 
-        self.run_benchbase([self.bench_name, 'mariadb', self.amount, 'execute'])
+        self.run_benchbase([self.bench_name, 'mysql', self.amount, 'execute'])
         time.sleep(5)
 
         self.mysqld.stop()
@@ -250,17 +277,14 @@ class BenchmarkSession:
         time.sleep(5)
 
         self.logger.info("dumping database...")
-        self.mysqld.mysqldump("benchbase", f"{self.session_path}/dbdump_latest.sql")
+        self.mysqld.mysqldump("offchaindb", f"{self.session_path}/dbdump_latest.sql")
 
         self.mysqld.stop()
 
-
-        # os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
-        os.system(f"mv -v /var/lib/mysql/server-binlog.* {self.session_path}/")
-        os.system(f"mkdir -p {self.session_path}/procdef")
-        os.system(f"cp -rv {os.getcwd()}/procdefs/{self.bench_name}/* {self.session_path}/procdef/")
-
-
+        os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
+        #os.system(f"mv -v /var/lib/mysql/server-binlog.* {self.session_path}/")
+        os.system(f"sudo chmod mysql:mysql {self.session_path}/server-binlog*")
+        os.system(f"sudo chmod 777 {self.session_path}/server-binlog*")
 
     def tablediff(self, table1: str, table2: str, columns: list[str]):
         """
@@ -289,9 +313,10 @@ class BenchmarkSession:
         handle = subprocess.Popen([
             'mysql',
             '-h127.0.0.1',
-            '-uroot',
+            '-udeploy_user',
             '-ppassword',
             '-B', '--silent', '--raw',
+#            '--local-infile=1',
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         handle.stdin.write(sql.encode('utf-8'))
@@ -334,9 +359,9 @@ class BenchmarkSession:
         handle = subprocess.Popen([
             'mysql',
             '-h127.0.0.1',
-            '-uroot',
+            '-udeploy_user',
             '-ppassword',
-            '-B', '--silent', '--raw',
+            '-B', '--silent', '--raw'
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         handle.stdin.write(sql.encode('utf-8'))
