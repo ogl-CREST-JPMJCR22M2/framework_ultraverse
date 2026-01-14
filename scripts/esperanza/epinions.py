@@ -223,7 +223,6 @@ if __name__ == "__main__":
     session = BenchmarkSession("epinions", "1m")
     logger = session.logger
     session.prepare()
-    session.prepare()
 
     # statelogd를 실행해서 binary log에서 statelog를 생성한다.
     session.run_statelogd(['-k', 'item2.i_id,useracct.u_id,review.i_id,review.u_id,trust.source_u_id,trust.target_u_id'])
