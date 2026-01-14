@@ -4,6 +4,8 @@ from typing import Optional
 import psycopg
 import mysql.connector
 import sys 
+import os
+import shutil
 
 #hosts = ['A', 'B', 'C']
 hosts = ['A']
@@ -110,22 +112,29 @@ def execInsert_m(parameter):
             conn = createConnection_m(host)
             cur = conn.cursor()
 
+            cwd = os.getcwd()
+            temp_dir = "/tmp/dataset"
+            os.makedirs(temp_dir, exist_ok=True) 
+            os.chmod(temp_dir, 0o777)
+
             for i in range(3):
 
-                cwd = os.getcwd()
-                #infile = f"/root/framework_APP/setting/dataset/{parameter}/{filename[i]}"
-                infile = f"dataset/{filename[i]}"
+                # tmpにコピーして読み込み
+                original_csv = f"{cwd}/esperanza/setting/dataset/{filename[i]}"
+                temp_csv = f"/tmp/dataset/{filename[i]}"
+                shutil.copyfile(original_csv, temp_csv)
+                os.chmod(temp_csv, 0o777)
 
                 sql = f"""
-                    LOAD DATA LOCAL INFILE '{infile}'
+                    LOAD DATA LOCAL INFILE '{temp_csv}'
                     INTO TABLE {host}_{tables[i]}
                     FIELDS TERMINATED BY ','
                     ENCLOSED BY '"'
                     LINES TERMINATED BY '\\r\\n'
                     IGNORE 1 ROWS;
                 """
-
                 cur.execute(sql)
+                os.remove(temp_csv)
 
             conn.commit()
 

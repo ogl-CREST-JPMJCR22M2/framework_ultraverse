@@ -121,8 +121,10 @@ class MySQLDaemon:
         self.logger.info("preparing MySQL data directory...")
 
         os.system(f"mkdir -p {self.data_path}")
+        os.system(f"sudo chmod -R 777 {self.data_path}")
 
-        username = get_current_user()
+        #username = get_current_user()
+        username = "root"
         mysqld = self.bin_for("mysqld")
 
         self.__exec__(mysqld, [
@@ -152,6 +154,7 @@ class MySQLDaemon:
             "-ppassword",
             "-e", "DROP DATABASE IF EXISTS offchaindb;"
                   "CREATE DATABASE offchaindb;"
+                  "SET PERSIST local_infile = 1;"
                   "FLUSH PRIVILEGES;"
         ])
 
@@ -187,7 +190,8 @@ class MySQLDaemon:
             f"--basedir={self.base_path}",
             f"--datadir={self.data_path}",
             f"--port={self.port}",
-            "--max_connections=2000"
+            "--max_connections=2000",
+            "--local-infile=1"
         ])
 
         return True

@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     session = BenchmarkSession("cfp", "1m")
     logger = session.logger
-    #session.prepare()
+    session.prepare()
 
     # statelogdを実行してbinary logからstatelogを生成します。
     session.run_statelogd(['-k', 'A_cfpval.partid'])

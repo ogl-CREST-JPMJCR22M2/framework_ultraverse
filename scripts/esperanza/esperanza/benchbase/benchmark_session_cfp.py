@@ -89,18 +89,18 @@ class BenchmarkSession:
 
     def run_prepare(self):
 
-        application_home = os.environ['APP_HOME']
+        #application_home = os.environ['APP_HOME']
 
         cwd = os.getcwd()
 
         subprocess.Popen(
-            ["python3", f"{cwd}/setting/create_tb.py"],
+            ["python3", f"{cwd}/esperanza/setting/create_tb.py"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE
         )
 
         subprocess.Popen(
-            ["python3", f"{cwd}/setting/del_and_insert.py"],
+            ["python3", f"{cwd}/esperanza/setting/del_and_insert.py"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE
         )
@@ -268,7 +268,7 @@ class BenchmarkSession:
         self.mysqld.start()
         time.sleep(5)
 
-        self.run_benchbase([self.bench_name, 'mysql', self.amount, 'execute'])
+        self.run_benchbase([self.bench_name, 'mariadb', self.amount, 'execute'])
         time.sleep(5)
 
         self.mysqld.stop()
@@ -281,9 +281,9 @@ class BenchmarkSession:
 
         self.mysqld.stop()
 
-        os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
-        #os.system(f"mv -v /var/lib/mysql/server-binlog.* {self.session_path}/")
-        os.system(f"sudo chmod mysql:mysql {self.session_path}/server-binlog*")
+        #os.system(f"mv -v {self.session_path}/mysql/server-binlog.* {self.session_path}/")
+        os.system(f"mv -v /var/lib/mysql/server-binlog.* {self.session_path}/")
+        os.system(f"sudo chown mysql:mysql {self.session_path}/server-binlog*")
         os.system(f"sudo chmod 777 {self.session_path}/server-binlog*")
 
     def tablediff(self, table1: str, table2: str, columns: list[str]):
@@ -316,7 +316,7 @@ class BenchmarkSession:
             '-udeploy_user',
             '-ppassword',
             '-B', '--silent', '--raw',
-#            '--local-infile=1',
+            '--local-infile=1',
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         handle.stdin.write(sql.encode('utf-8'))
