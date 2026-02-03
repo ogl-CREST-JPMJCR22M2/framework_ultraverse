@@ -5,6 +5,8 @@
 #include "utils/StringUtil.hpp"
 #include "Transaction.hpp"
 
+#include "ultraverse_state.pb.h"
+
 
 namespace ultraverse::state::v2 {
     Transaction::Transaction():
@@ -70,6 +72,10 @@ namespace ultraverse::state::v2 {
     std::vector<std::shared_ptr<Query>> &Transaction::queries() {
         return _queries;
     }
+
+    const std::vector<std::shared_ptr<Query>> &Transaction::queries() const {
+        return _queries;
+    }
     
     CombinedIterator<StateItem> Transaction::readSet_begin() {
         std::vector<std::reference_wrapper<std::vector<StateItem>>> containers;
@@ -103,7 +109,7 @@ namespace ultraverse::state::v2 {
         return writeSet_begin().end();
     }
     
-    bool Transaction::isRelatedToDatabase(const std::string database) {
+    bool Transaction::isRelatedToDatabase(const std::string database) const {
         return std::any_of(_queries.begin(), _queries.end(), [&database](auto &query) {
             return query->database() == database;
         });
@@ -124,5 +130,54 @@ namespace ultraverse::state::v2 {
         _nextPos = header.nextPos;
         
         return *this;
+    }
+
+    void Transaction::toProtobuf(ultraverse::state::v2::proto::Transaction *out) const {
+        if (out == nullptr) {
+            return;
+        }
+
+        out->Clear();
+        out->set_timestamp(_timestamp);
+        out->set_gid(_gid);
+        out->set_xid(_xid);
+        out->set_is_successful(_isSuccessful);
+        out->set_flags(_flags);
+        out->set_next_pos(_nextPos);
+
+        for (const auto &dep : _dependencies) {
+            out->add_dependencies(dep);
+        }
+
+        for (const auto &query : _queries) {
+            if (!query) {
+                continue;
+            }
+            auto *queryMsg = out->add_queries();
+            query->toProtobuf(queryMsg);
+        }
+    }
+
+    void Transaction::fromProtobuf(const ultraverse::state::v2::proto::Transaction &msg) {
+        _timestamp = msg.timestamp();
+        _gid = msg.gid();
+        _xid = msg.xid();
+        _isSuccessful = msg.is_successful();
+        _flags = static_cast<uint8_t>(msg.flags());
+        _nextPos = msg.next_pos();
+
+        _dependencies.clear();
+        _dependencies.reserve(static_cast<size_t>(msg.dependencies_size()));
+        for (const auto dep : msg.dependencies()) {
+            _dependencies.push_back(dep);
+        }
+
+        _queries.clear();
+        _queries.reserve(static_cast<size_t>(msg.queries_size()));
+        for (const auto &queryMsg : msg.queries()) {
+            auto query = std::make_shared<Query>();
+            query->fromProtobuf(queryMsg);
+            _queries.emplace_back(std::move(query));
+        }
     }
 }

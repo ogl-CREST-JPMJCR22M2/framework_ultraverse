@@ -14,6 +14,8 @@
 #include "../StateChangePlan.hpp"
 #include "../StateChangeContext.hpp"
 
+#include "mariadb/state/new/proto/ultraverse_state_fwd.hpp"
+
 namespace ultraverse::state::v2 {
     
     struct RowAlias {
@@ -22,6 +24,9 @@ namespace ultraverse::state::v2 {
         
         template <typename Archive>
         void serialize(Archive &archive);
+
+        void toProtobuf(ultraverse::state::v2::proto::RowAlias *out) const;
+        void fromProtobuf(const ultraverse::state::v2::proto::RowAlias &msg);
     };
     
     /**
@@ -144,7 +149,7 @@ namespace ultraverse::state::v2 {
         virtual std::shared_ptr<StateItem> resolveRowAlias(const StateItem &alias) const override;
         
         void addRowAlias(const StateItem &alias, const StateItem &real);
-        void addTransaction(Transaction &transaction);
+        bool addTransaction(Transaction &transaction);
         
     private:
         const StateChangePlan &_plan;

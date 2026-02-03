@@ -8,8 +8,12 @@ namespace ultraverse::state::v2 {
     StateChangePlan::StateChangePlan():
         _startGid(0),
         _endGid(0),
+        _hasGidRange(false),
+        _replayFromGid(0),
+        _hasReplayFromGid(false),
         _threadNum(4),
         _writeStateLog(false),
+        _executeReplaceQuery(true),
         _rangeComparisonMethod(RangeComparisonMethod::EQ_ONLY)
     {
     
@@ -53,6 +57,7 @@ namespace ultraverse::state::v2 {
     
     void StateChangePlan::setStartGid(gid_t startGid) {
         _startGid = startGid;
+        _hasGidRange = true;
     }
     
     gid_t StateChangePlan::endGid() const {
@@ -61,6 +66,24 @@ namespace ultraverse::state::v2 {
     
     void StateChangePlan::setEndGid(gid_t endGid) {
         _endGid = endGid;
+        _hasGidRange = true;
+    }
+
+    bool StateChangePlan::hasGidRange() const {
+        return _hasGidRange;
+    }
+
+    gid_t StateChangePlan::replayFromGid() const {
+        return _replayFromGid;
+    }
+    
+    void StateChangePlan::setReplayFromGid(gid_t replayFromGid) {
+        _replayFromGid = replayFromGid;
+        _hasReplayFromGid = true;
+    }
+
+    bool StateChangePlan::hasReplayFromGid() const {
+        return _hasReplayFromGid;
     }
     
     std::vector<gid_t> &StateChangePlan::rollbackGids() {
@@ -153,6 +176,14 @@ namespace ultraverse::state::v2 {
     void StateChangePlan::setReportPath(const std::string &reportPath) {
         _reportPath = reportPath;
     }
+
+    const std::vector<std::string> &StateChangePlan::replaceQueries() const {
+        return _replaceQueries;
+    }
+
+    void StateChangePlan::setReplaceQueries(std::vector<std::string> replaceQueries) {
+        _replaceQueries = std::move(replaceQueries);
+    }
     
     bool StateChangePlan::isFullReplay() const {
         return _isFullReplay;
@@ -176,6 +207,14 @@ namespace ultraverse::state::v2 {
     
     void StateChangePlan::setDropIntermediateDB(bool dropIntermediateDB) {
         _dropIntermediateDB = dropIntermediateDB;
+    }
+
+    bool StateChangePlan::executeReplaceQuery() const {
+        return _executeReplaceQuery;
+    }
+
+    void StateChangePlan::setExecuteReplaceQuery(bool executeReplaceQuery) {
+        _executeReplaceQuery = executeReplaceQuery;
     }
     
     int StateChangePlan::threadNum() const {
@@ -204,6 +243,24 @@ namespace ultraverse::state::v2 {
 
     std::set<std::string> &StateChangePlan::keyColumns() {
         return _keyColumns;
+    }
+
+    std::vector<std::vector<std::string>> &StateChangePlan::keyColumnGroups() {
+        return _keyColumnGroups;
+    }
+
+    const std::vector<std::vector<std::string>> &StateChangePlan::keyColumnGroups() const {
+        return _keyColumnGroups;
+    }
+
+    void StateChangePlan::setKeyColumnGroups(std::vector<std::vector<std::string>> keyColumnGroups) {
+        _keyColumnGroups = std::move(keyColumnGroups);
+        _keyColumns.clear();
+        for (const auto &group : _keyColumnGroups) {
+            for (const auto &column : group) {
+                _keyColumns.insert(column);
+            }
+        }
     }
     
     std::vector<std::pair<std::string, std::string>> &StateChangePlan::columnAliases() {

@@ -5,6 +5,8 @@
 #include "utils/StringUtil.hpp"
 #include "TableDependencyGraph.hpp"
 
+#include "ultraverse_state.pb.h"
+
 
 namespace ultraverse::state::v2 {
     TableDependencyGraph::TableDependencyGraph():
@@ -58,8 +60,14 @@ namespace ultraverse::state::v2 {
             writeTableSet.insert(table);
         }
         
-        if (readTableSet.empty() || writeTableSet.empty()) {
+        if (writeTableSet.empty()) {
             return false;
+        }
+
+        if (readTableSet.empty()) {
+            // Write-only queries still affect their target tables (e.g., INSERT values, DROP/TRUNCATE).
+            // Model this as dependencies among written tables so they are tracked in the graph.
+            readTableSet = writeTableSet;
         }
         
         for (const auto &fromTable: readTableSet) {
@@ -95,7 +103,7 @@ namespace ultraverse::state::v2 {
     
     bool TableDependencyGraph::hasPeerDependencies(const std::string &tableName) {
         if (_nodeMap.find(tableName) == _nodeMap.end()) {
-            return true;
+            return false;
         }
         
         boost::graph_traits<Graph>::in_edge_iterator ii, iiEnd;
@@ -119,10 +127,16 @@ namespace ultraverse::state::v2 {
     }
     
     bool TableDependencyGraph::isRelated(const std::string &fromTable, const std::string &toTable) {
+        auto fromIt = _nodeMap.find(fromTable);
+        auto toIt = _nodeMap.find(toTable);
+        if (fromIt == _nodeMap.end() || toIt == _nodeMap.end()) {
+            return false;
+        }
+
         boost::graph_traits<Graph>::in_edge_iterator ii, iiEnd, next;
-        boost::tie(ii, iiEnd) = boost::in_edges(_nodeMap.at(toTable), _graph);
+        boost::tie(ii, iiEnd) = boost::in_edges(toIt->second, _graph);
         
-        auto fromTableIndex = _nodeMap.at(fromTable);
+        auto fromTableIndex = fromIt->second;
         
         for (next = ii; ii != iiEnd; ii = next) {
             next++;
@@ -133,5 +147,42 @@ namespace ultraverse::state::v2 {
         }
         
         return false;
+    }
+
+    void TableDependencyGraph::toProtobuf(ultraverse::state::v2::proto::TableDependencyGraph *out) const {
+        if (out == nullptr) {
+            return;
+        }
+
+        out->Clear();
+        for (const auto &pair : _nodeMap) {
+            const auto &table = pair.first;
+            const auto nodeIdx = pair.second;
+
+            auto *entry = out->add_entries();
+            entry->set_table(table);
+
+            boost::graph_traits<Graph>::out_edge_iterator oi, oiEnd, next;
+            boost::tie(oi, oiEnd) = boost::out_edges(nodeIdx, _graph);
+            for (next = oi; oi != oiEnd; oi = next) {
+                next++;
+                entry->add_related_tables(_graph[oi->m_target]);
+            }
+        }
+    }
+
+    void TableDependencyGraph::fromProtobuf(const ultraverse::state::v2::proto::TableDependencyGraph &msg) {
+        _graph.clear();
+        _nodeMap.clear();
+
+        for (const auto &entry : msg.entries()) {
+            addTable(entry.table());
+        }
+
+        for (const auto &entry : msg.entries()) {
+            for (const auto &related : entry.related_tables()) {
+                addRelationship(entry.table(), related);
+            }
+        }
     }
 }

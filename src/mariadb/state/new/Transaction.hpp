@@ -8,6 +8,8 @@
 #include <memory>
 #include <unordered_map>
 
+#include "mariadb/state/new/proto/ultraverse_state_fwd.hpp"
+
 #include "CombinedIterator.hpp"
 
 #include "mariadb/state/StateHash.hpp"
@@ -66,6 +68,7 @@ namespace ultraverse::state::v2 {
         TransactionHeader header();
         
         std::vector<std::shared_ptr<Query>> &queries();
+        const std::vector<std::shared_ptr<Query>> &queries() const;
         
         CombinedIterator<StateItem> readSet_begin();
         
@@ -112,7 +115,7 @@ namespace ultraverse::state::v2 {
         /**
          * 주어진 DB와 관련된 쿼리가 하나라도 있는지 확인합니다.
          */
-        bool isRelatedToDatabase(const std::string database);
+        bool isRelatedToDatabase(const std::string database) const;
         
         
         /**
@@ -123,8 +126,8 @@ namespace ultraverse::state::v2 {
         
         Transaction &operator+=(TransactionHeader &header);
         
-        template <typename Archive>
-        void serialize(Archive &archive);
+        void toProtobuf(ultraverse::state::v2::proto::Transaction *out) const;
+        void fromProtobuf(const ultraverse::state::v2::proto::Transaction &msg);
     private:
         friend class StateLogReader;
         
@@ -143,7 +146,5 @@ namespace ultraverse::state::v2 {
         std::vector<std::shared_ptr<Query>> _queries;
     };
 }
-
-#include "Transaction.cereal.cpp"
 
 #endif //ULTRAVERSE_STATE_TRANSACTION_HPP

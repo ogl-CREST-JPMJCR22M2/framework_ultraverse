@@ -1,9 +1,232 @@
 #include "StateItem.h"
 
-#include <sstream>
+#include <cctype>
+#include <cstdlib>
 #include <execution>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 #include <boost/tuple/tuple.hpp>
+
+#include "ultraverse_state.pb.h"
+
+namespace {
+
+struct DecimalParts {
+  bool negative = false;
+  std::string intPart;
+  std::string fracPart;
+};
+
+std::string toHexLiteral(const std::string &input) {
+  static const char *hex = "0123456789ABCDEF";
+  std::string out;
+  out.reserve(2 + input.size() * 2 + 1);
+  out.push_back('X');
+  out.push_back('\'');
+  for (unsigned char ch : input) {
+    out.push_back(hex[(ch >> 4) & 0x0F]);
+    out.push_back(hex[ch & 0x0F]);
+  }
+  out.push_back('\'');
+  return out;
+}
+
+std::string formatStateDataForWhere(const StateData &data) {
+  switch (data.Type()) {
+    case en_column_data_int: {
+      int64_t value = 0;
+      if (data.Get(value)) {
+        return std::to_string(value);
+      }
+      return "NULL";
+    }
+    case en_column_data_uint: {
+      uint64_t value = 0;
+      if (data.Get(value)) {
+        return std::to_string(value);
+      }
+      return "NULL";
+    }
+    case en_column_data_double: {
+      double value = 0.0;
+      if (data.Get(value)) {
+        std::ostringstream out;
+        out << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+        return out.str();
+      }
+      return "NULL";
+    }
+    case en_column_data_decimal: {
+      std::string value;
+      if (data.Get(value)) {
+        return toHexLiteral(value);
+      }
+      return "NULL";
+    }
+    case en_column_data_string: {
+      std::string value;
+      if (data.Get(value)) {
+        return toHexLiteral(value);
+      }
+      return "NULL";
+    }
+    default:
+      return "NULL";
+  }
+}
+
+bool parseDecimalString(const std::string &input, DecimalParts *out) {
+  if (out == nullptr) {
+    return false;
+  }
+
+  size_t start = 0;
+  size_t end = input.size();
+  while (start < end && std::isspace(static_cast<unsigned char>(input[start])) != 0) {
+    start++;
+  }
+  while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+    end--;
+  }
+
+  if (start >= end) {
+    return false;
+  }
+
+  bool negative = false;
+  if (input[start] == '+' || input[start] == '-') {
+    negative = (input[start] == '-');
+    start++;
+  }
+
+  if (start >= end) {
+    return false;
+  }
+
+  bool seenDot = false;
+  std::string intPart;
+  std::string fracPart;
+
+  for (size_t i = start; i < end; ++i) {
+    char c = input[i];
+    if (c == '.') {
+      if (seenDot) {
+        return false;
+      }
+      seenDot = true;
+      continue;
+    }
+    if (std::isdigit(static_cast<unsigned char>(c)) == 0) {
+      return false;
+    }
+    if (seenDot) {
+      fracPart.push_back(c);
+    } else {
+      intPart.push_back(c);
+    }
+  }
+
+  if (intPart.empty() && fracPart.empty()) {
+    return false;
+  }
+
+  if (intPart.empty()) {
+    intPart = "0";
+  }
+
+  size_t firstNonZero = intPart.find_first_not_of('0');
+  if (firstNonZero == std::string::npos) {
+    intPart = "0";
+  } else if (firstNonZero > 0) {
+    intPart = intPart.substr(firstNonZero);
+  }
+
+  while (!fracPart.empty() && fracPart.back() == '0') {
+    fracPart.pop_back();
+  }
+
+  if (intPart == "0" && fracPart.empty()) {
+    negative = false;
+  }
+
+  out->negative = negative;
+  out->intPart = std::move(intPart);
+  out->fracPart = std::move(fracPart);
+  return true;
+}
+
+std::string normalizeDecimalString(const std::string &input, bool *ok) {
+  DecimalParts parts;
+  bool parsed = parseDecimalString(input, &parts);
+  if (ok != nullptr) {
+    *ok = parsed;
+  }
+  if (!parsed) {
+    return input;
+  }
+
+  std::string normalized;
+  if (parts.negative) {
+    normalized.push_back('-');
+  }
+  normalized += parts.intPart;
+  if (!parts.fracPart.empty()) {
+    normalized.push_back('.');
+    normalized += parts.fracPart;
+  }
+  return normalized;
+}
+
+int compareDecimalMagnitude(const DecimalParts &left, const DecimalParts &right) {
+  if (left.intPart.size() != right.intPart.size()) {
+    return left.intPart.size() < right.intPart.size() ? -1 : 1;
+  }
+
+  int intCmp = left.intPart.compare(right.intPart);
+  if (intCmp != 0) {
+    return intCmp < 0 ? -1 : 1;
+  }
+
+  size_t maxFrac = std::max(left.fracPart.size(), right.fracPart.size());
+  for (size_t i = 0; i < maxFrac; ++i) {
+    char leftDigit = i < left.fracPart.size() ? left.fracPart[i] : '0';
+    char rightDigit = i < right.fracPart.size() ? right.fracPart[i] : '0';
+    if (leftDigit != rightDigit) {
+      return leftDigit < rightDigit ? -1 : 1;
+    }
+  }
+
+  return 0;
+}
+
+int compareDecimalStrings(const std::string &left, const std::string &right) {
+  DecimalParts leftParts;
+  DecimalParts rightParts;
+  if (!parseDecimalString(left, &leftParts) || !parseDecimalString(right, &rightParts)) {
+    int cmp = strcmp(left.c_str(), right.c_str());
+    if (cmp < 0) {
+      return -1;
+    }
+    if (cmp > 0) {
+      return 1;
+    }
+    return 0;
+  }
+
+  if (leftParts.negative != rightParts.negative) {
+    return leftParts.negative ? -1 : 1;
+  }
+
+  int magnitude = compareDecimalMagnitude(leftParts, rightParts);
+  if (leftParts.negative) {
+    magnitude = -magnitude;
+  }
+  return magnitude;
+}
+
+}  // namespace
 
 StateData::StateData()
 {
@@ -38,11 +261,7 @@ StateData::StateData(const std::string &val):
 
 StateData::StateData(const StateData &c)
 {
-  if (c.type == en_column_data_string) {
-      Copy(c);
-  } else {
-      memcpy(this, &c, sizeof(StateData));
-  }
+  Copy(c);
 }
 
 StateData::~StateData()
@@ -52,7 +271,7 @@ StateData::~StateData()
 
 void StateData::Clear()
 {
-  if (type == en_column_data_string && d.str != nullptr)
+  if ((type == en_column_data_string || type == en_column_data_decimal) && d.str != nullptr)
   {
     free(d.str);
   }
@@ -66,12 +285,19 @@ void StateData::Clear()
 
 void StateData::Copy(const StateData &c)
 {
+  is_subselect = c.is_subselect;
   is_equal = c.is_equal;
   type = c.type;
-  if (type == en_column_data_string)
+  str_len = c.str_len;
+  if (type == en_column_data_string || type == en_column_data_decimal)
   {
-    d.str = strdup(c.d.str);
-    str_len = c.str_len;
+    if (c.d.str != nullptr && str_len > 0) {
+      d.str = static_cast<char *>(malloc(str_len + 1));
+      memcpy(d.str, c.d.str, str_len);
+      d.str[str_len] = 0;
+    } else {
+      d.str = nullptr;
+    }
   }
   else
   {
@@ -108,6 +334,9 @@ bool StateData::SetData(en_state_log_column_data_type _type, void *_data, size_t
     Set((char *)_data, _length);
     // debug("[StateData::SetData] en_column_data_string %s", d.str);
     break;
+  case en_column_data_decimal:
+    SetDecimal((char *)_data, _length);
+    break;
 
   default:
     // error("[StateData::SetData] data type parsing error");
@@ -128,6 +357,11 @@ bool StateData::ConvertData(en_state_log_column_data_type _type)
   if (type == _type)
   {
     return true;
+  }
+
+  if (type == en_column_data_decimal || _type == en_column_data_decimal)
+  {
+    return false;
   }
 
   switch (_type)
@@ -176,6 +410,8 @@ bool StateData::ConvertData(en_state_log_column_data_type _type)
     Set(value.c_str(), value.size());
     return true;
   }
+  case en_column_data_decimal:
+    return false;
 
   default:
     return false;
@@ -252,6 +488,24 @@ void StateData::Set(const char *val, size_t length)
   calculateHash();
 }
 
+void StateData::SetDecimal(const std::string &val)
+{
+  SetDecimal(val.c_str(), val.size());
+}
+
+void StateData::SetDecimal(const char *val, size_t length)
+{
+  Clear();
+
+  type = en_column_data_decimal;
+  d.str = (char *)malloc(length + 1);
+  memcpy(d.str, val, length);
+  d.str[length] = 0;
+  str_len = length;
+
+  calculateHash();
+}
+
 bool StateData::Get(int64_t &val) const
 {
   switch (type)
@@ -265,6 +519,8 @@ bool StateData::Get(int64_t &val) const
     char *end;
     val = std::strtol(d.str, &end, 10);
     return true;
+  case en_column_data_decimal:
+    return false;
 
   case en_column_data_double:
   default:
@@ -285,6 +541,8 @@ bool StateData::Get(uint64_t &val) const
     char *end;
     val = std::strtoul(d.str, &end, 10);
     return true;
+  case en_column_data_decimal:
+    return false;
 
   case en_column_data_double:
   default:
@@ -304,6 +562,8 @@ bool StateData::Get(double &val) const
     char *end;
     val = std::strtold(d.str, &end);
     return true;
+  case en_column_data_decimal:
+    return false;
 
   case en_column_data_int:
   case en_column_data_uint:
@@ -332,6 +592,9 @@ bool StateData::Get(std::string &val) const
     char *end;
     val = std::string(d.str);
     return true;
+  case en_column_data_decimal:
+    val = std::string(d.str, str_len);
+    return true;
 
   default:
     return false;
@@ -346,7 +609,7 @@ bool StateData::operator==(const StateData &c) const
 #ifdef __amd64__
   static_assert(sizeof(UNION_RAW_DATA) == 8, "the size of UNION_RAW_DATA must be 8");
   
-  if (type == en_column_data_string)
+  if (type == en_column_data_string || type == en_column_data_decimal)
       return str_len == c.str_len && memcmp(d.str, c.d.str, str_len) == 0;
 
   return d.ival == c.d.ival;
@@ -363,6 +626,8 @@ bool StateData::operator==(const StateData &c) const
     return d.fval == c.d.fval;
 
   case en_column_data_string:
+    return str_len == c.str_len && memcmp(d.str, c.d.str, str_len) == 0;
+  case en_column_data_decimal:
     return str_len == c.str_len && memcmp(d.str, c.d.str, str_len) == 0;
 
   case en_column_data_null:
@@ -383,6 +648,8 @@ bool StateData::operator!=(const StateData &c) const
   
   if (type == en_column_data_string)
       return str_len != c.str_len || strcmp(d.str, c.d.str) != 0;
+  if (type == en_column_data_decimal)
+      return str_len != c.str_len || memcmp(d.str, c.d.str, str_len) != 0;
   
   return d.ival == c.d.ival;
 #else
@@ -399,6 +666,8 @@ bool StateData::operator!=(const StateData &c) const
 
   case en_column_data_string:
     return str_len != c.str_len || strcmp(d.str, c.d.str) != 0;
+  case en_column_data_decimal:
+    return str_len != c.str_len || memcmp(d.str, c.d.str, str_len) != 0;
 
   case en_column_data_null:
     return false;
@@ -426,6 +695,8 @@ bool StateData::operator>(const StateData &c) const
 
   case en_column_data_string:
     return strcmp(d.str, c.d.str) > 0;
+  case en_column_data_decimal:
+    return false;
 
   default:
     return false;
@@ -449,6 +720,8 @@ bool StateData::operator>=(const StateData &c) const
 
   case en_column_data_string:
       return strcmp(d.str, c.d.str) >= 0;
+  case en_column_data_decimal:
+      return false;
 
 
   default:
@@ -473,6 +746,8 @@ bool StateData::operator<(const StateData &c) const
 
   case en_column_data_string:
       return strcmp(d.str, c.d.str) < 0;
+  case en_column_data_decimal:
+      return false;
 
 
   default:
@@ -497,6 +772,8 @@ bool StateData::operator<=(const StateData &c) const
 
   case en_column_data_string:
       return strcmp(d.str, c.d.str) <= 0;
+  case en_column_data_decimal:
+      return false;
 
   default:
     return false;
@@ -541,7 +818,7 @@ void StateData::calculateHash() {
         return;
     }
     
-    if (Type() == en_column_data_string) {
+    if (Type() == en_column_data_string || Type() == en_column_data_decimal) {
         _hash = (
             std::hash<en_state_log_column_data_type>()(Type()) ^
             (std::hash<std::string>()(std::string(d.str, str_len)) + 0x9e3779b9 + (_hash << 6) + (_hash >> 2))
@@ -583,6 +860,7 @@ StateRange::~StateRange()
 
 void StateRange::SetBegin(const StateData &_begin, bool _add_equal)
 {
+  ensureUniqueRange();
   range->emplace_back(ST_RANGE{_begin, StateData()});
   if (_add_equal)
     range->back().begin.SetEqual();
@@ -592,6 +870,7 @@ void StateRange::SetBegin(const StateData &_begin, bool _add_equal)
 
 void StateRange::SetEnd(const StateData &_end, bool _add_equal)
 {
+  ensureUniqueRange();
   range->emplace_back(ST_RANGE{StateData(), _end});
   if (_add_equal)
     range->back().end.SetEqual();
@@ -601,6 +880,7 @@ void StateRange::SetEnd(const StateData &_end, bool _add_equal)
 
 void StateRange::SetBetween(const StateData &_begin, const StateData &_end)
 {
+  ensureUniqueRange();
   if (_begin < _end)
     range->emplace_back(ST_RANGE{_begin, _end});
   else
@@ -614,6 +894,7 @@ void StateRange::SetBetween(const StateData &_begin, const StateData &_end)
 
 void StateRange::SetValue(const StateData &_value, bool _add_equal)
 {
+  ensureUniqueRange();
   if (_add_equal)
   {
     range->emplace_back(ST_RANGE{_value, _value});
@@ -746,7 +1027,7 @@ std::string StateRange::MakeWhereQuery(std::string columnName) const
       }
       else if (i.begin.IsNone() && !i.end.IsNone())
       {
-        i.end.Get(val1);
+        val1 = formatStateDataForWhere(i.end);
         if (i.end.IsEqual())
         {
           ss << key_name << "<=" << val1 << " OR ";
@@ -758,7 +1039,7 @@ std::string StateRange::MakeWhereQuery(std::string columnName) const
       }
       else if (!i.begin.IsNone() && i.end.IsNone())
       {
-        i.begin.Get(val1);
+        val1 = formatStateDataForWhere(i.begin);
         if (i.begin.IsEqual())
         {
           ss << key_name << ">=" << val1 << " OR ";
@@ -770,8 +1051,8 @@ std::string StateRange::MakeWhereQuery(std::string columnName) const
       }
       else //(!i.begin.IsNone() && !i.end.IsNone())
       {
-        i.begin.Get(val1);
-        i.end.Get(val2);
+        val1 = formatStateDataForWhere(i.begin);
+        val2 = formatStateDataForWhere(i.end);
 
         if (val1 == val2)
         {
@@ -818,6 +1099,9 @@ std::string StateRange::MakeWhereQuery(std::string columnName) const
     //where 절이 필요하지 않음
     return std::string();
   }
+}
+
+void StateRange::SetValues(const StateData &_values) {
 }
 
 const std::vector<StateRange::ST_RANGE> *StateRange::GetRange() const
@@ -948,6 +1232,8 @@ void StateRange::OR_FAST(const StateRange &b, bool ignoreIntersect) {
         *this = b;
         return;
     }
+
+    ensureUniqueRange();
     
     auto &range1 = *range;
     const auto &range2 = *b.range;
@@ -1159,6 +1445,18 @@ void StateRange::arrangeSelf() {
     range = OR_ARRANGE2(range);
     
     calculateHash();
+}
+
+void StateRange::ensureUniqueRange() {
+  if (!range) {
+    range = std::make_shared<std::vector<ST_RANGE>>();
+    range->reserve(2);
+    return;
+  }
+
+  if (range.use_count() > 1) {
+    range = std::make_shared<std::vector<ST_RANGE>>(*range);
+  }
 }
 
 void StateRange::calculateHash() {
@@ -1373,15 +1671,15 @@ const StateRange &StateItem::MakeRange2() const {
         );
         
         if (condition_type == EN_CONDITION_AND) {
-            output = ranges.back();
-            ranges.pop_back();
+            output = ranges.front();
+            ranges.erase(ranges.begin());
             
             for (auto &range : ranges) {
                 output = *StateRange::AND(output, range);
             }
         } else if (condition_type == EN_CONDITION_OR) {
-            output = ranges.back();
-            ranges.pop_back();
+            output = ranges.front();
+            ranges.erase(ranges.begin());
             
             for (auto &range : ranges) {
                 output = *StateRange::OR(output, range);
@@ -1428,6 +1726,9 @@ const StateRange &StateItem::MakeRange2() const {
                     for (auto &data : data_list) {
                         range.SetValue(data, true);
                     }
+                    break;
+                case FUNCTION_WILDCARD:
+                    range.setWildcard(true);
                     break;
                     
                 default:
@@ -1564,4 +1865,185 @@ StateItem StateItem::Wildcard(const std::string &name) {
     item.function_type = FUNCTION_WILDCARD;
     
     return item;
+}
+
+void StateData::toProtobuf(ultraverse::state::v2::proto::StateData *out) const {
+    if (out == nullptr) {
+        return;
+    }
+
+    out->Clear();
+    out->set_is_subselect(is_subselect);
+    out->set_is_equal(is_equal);
+    out->set_type(static_cast<uint32_t>(type));
+    out->set_hash(static_cast<uint64_t>(_hash));
+
+    switch (type) {
+        case en_column_data_int:
+            out->set_int_value(d.ival);
+            break;
+        case en_column_data_uint:
+            out->set_uint_value(d.uval);
+            break;
+        case en_column_data_double:
+            out->set_double_value(d.fval);
+            break;
+        case en_column_data_string:
+        case en_column_data_decimal:
+            if (d.str != nullptr && str_len > 0) {
+                out->set_string_value(std::string(d.str, str_len));
+            } else {
+                out->set_string_value("");
+            }
+            break;
+        case en_column_data_null:
+        case en_column_data_from_subselect:
+        default:
+            break;
+    }
+}
+
+void StateData::fromProtobuf(const ultraverse::state::v2::proto::StateData &msg) {
+    Clear();
+
+    const auto dataType = static_cast<en_state_log_column_data_type>(msg.type());
+    switch (dataType) {
+        case en_column_data_int:
+            Set(static_cast<int64_t>(msg.int_value()));
+            break;
+        case en_column_data_uint:
+            Set(static_cast<uint64_t>(msg.uint_value()));
+            break;
+        case en_column_data_double:
+            Set(static_cast<double>(msg.double_value()));
+            break;
+        case en_column_data_string: {
+            const auto &value = msg.string_value();
+            Set(value.c_str(), value.size());
+            break;
+        }
+        case en_column_data_decimal: {
+            const auto &value = msg.string_value();
+            SetDecimal(value.c_str(), value.size());
+            break;
+        }
+        case en_column_data_null:
+        case en_column_data_from_subselect:
+        default:
+            Clear();
+            break;
+    }
+
+    is_subselect = msg.is_subselect();
+    is_equal = msg.is_equal();
+    type = dataType;
+    _hash = static_cast<std::size_t>(msg.hash());
+}
+
+void StateRange::ST_RANGE::toProtobuf(ultraverse::state::v2::proto::StateRangeInterval *out) const {
+    if (out == nullptr) {
+        return;
+    }
+
+    out->Clear();
+    begin.toProtobuf(out->mutable_begin());
+    end.toProtobuf(out->mutable_end());
+}
+
+void StateRange::ST_RANGE::fromProtobuf(const ultraverse::state::v2::proto::StateRangeInterval &msg) {
+    begin.fromProtobuf(msg.begin());
+    end.fromProtobuf(msg.end());
+}
+
+void StateRange::toProtobuf(ultraverse::state::v2::proto::StateRange *out) const {
+    if (out == nullptr) {
+        return;
+    }
+
+    out->Clear();
+    out->set_hash(static_cast<uint64_t>(_hash));
+
+    if (!range) {
+        return;
+    }
+
+    for (const auto &entry : *range) {
+        auto *interval = out->add_range();
+        entry.toProtobuf(interval);
+    }
+}
+
+void StateRange::fromProtobuf(const ultraverse::state::v2::proto::StateRange &msg) {
+    range = std::make_shared<std::vector<ST_RANGE>>();
+    range->reserve(static_cast<size_t>(msg.range_size()));
+    _wildcard = false;
+    _hash = static_cast<std::size_t>(msg.hash());
+
+    for (const auto &interval : msg.range()) {
+        ST_RANGE entry;
+        entry.fromProtobuf(interval);
+        range->push_back(std::move(entry));
+    }
+}
+
+void StateItem::toProtobuf(ultraverse::state::v2::proto::StateItem *out) const {
+    if (out == nullptr) {
+        return;
+    }
+
+    out->Clear();
+    out->set_condition_type(static_cast<uint32_t>(condition_type));
+    out->set_function_type(static_cast<uint32_t>(function_type));
+    out->set_name(name);
+
+    for (const auto &arg : arg_list) {
+        auto *argMsg = out->add_arg_list();
+        arg.toProtobuf(argMsg);
+    }
+
+    for (const auto &data : data_list) {
+        auto *dataMsg = out->add_data_list();
+        data.toProtobuf(dataMsg);
+    }
+
+    for (const auto &subQuery : sub_query_list) {
+        auto *subMsg = out->add_sub_query_list();
+        subQuery.toProtobuf(subMsg);
+    }
+
+    _rangeCache.toProtobuf(out->mutable_range_cache());
+    out->set_is_range_cache_built(_isRangeCacheBuilt);
+}
+
+void StateItem::fromProtobuf(const ultraverse::state::v2::proto::StateItem &msg) {
+    condition_type = static_cast<EN_CONDITION_TYPE>(msg.condition_type());
+    function_type = static_cast<EN_FUNCTION_TYPE>(msg.function_type());
+    name = msg.name();
+
+    arg_list.clear();
+    arg_list.reserve(static_cast<size_t>(msg.arg_list_size()));
+    for (const auto &argMsg : msg.arg_list()) {
+        StateItem arg;
+        arg.fromProtobuf(argMsg);
+        arg_list.emplace_back(std::move(arg));
+    }
+
+    data_list.clear();
+    data_list.reserve(static_cast<size_t>(msg.data_list_size()));
+    for (const auto &dataMsg : msg.data_list()) {
+        StateData data;
+        data.fromProtobuf(dataMsg);
+        data_list.emplace_back(std::move(data));
+    }
+
+    sub_query_list.clear();
+    sub_query_list.reserve(static_cast<size_t>(msg.sub_query_list_size()));
+    for (const auto &subMsg : msg.sub_query_list()) {
+        StateItem sub;
+        sub.fromProtobuf(subMsg);
+        sub_query_list.emplace_back(std::move(sub));
+    }
+
+    _rangeCache.fromProtobuf(msg.range_cache());
+    _isRangeCacheBuilt = msg.is_range_cache_built();
 }

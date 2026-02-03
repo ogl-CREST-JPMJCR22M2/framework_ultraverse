@@ -4,14 +4,38 @@
 
 #include "StateRelationshipResolver.hpp"
 
+#include <unordered_set>
+
 #include "utils/StringUtil.hpp"
 
+#include "ultraverse_state.pb.h"
+
 namespace ultraverse::state::v2 {
+
+    void RowAlias::toProtobuf(ultraverse::state::v2::proto::RowAlias *out) const {
+        if (out == nullptr) {
+            return;
+        }
+
+        out->Clear();
+        alias.toProtobuf(out->mutable_alias());
+        real.toProtobuf(out->mutable_real());
+    }
+
+    void RowAlias::fromProtobuf(const ultraverse::state::v2::proto::RowAlias &msg) {
+        alias.fromProtobuf(msg.alias());
+        real.fromProtobuf(msg.real());
+    }
     
     std::string RelationshipResolver::resolveChain(const std::string &columnExpr) const {
         std::string _columnExpr = columnExpr;
+        std::unordered_set<std::string> visited;
         
         while (true) {
+            if (!visited.insert(_columnExpr).second) {
+                return std::string();
+            }
+            
             auto alias = std::move(resolveColumnAlias(_columnExpr));
             auto foreignKey = std::move(resolveForeignKey(!alias.empty() ? alias : _columnExpr));
             
@@ -32,8 +56,13 @@ namespace ultraverse::state::v2 {
     
     std::shared_ptr<StateItem> RelationshipResolver::resolveRowChain(const StateItem &item) const {
         std::shared_ptr<StateItem> _item = std::make_shared<StateItem>(item);
+        std::unordered_set<std::string> visited;
         
         while (true) {
+            if (!visited.insert(_item->name).second) {
+                return nullptr;
+            }
+            
             auto alias = std::move(resolveRowAlias(*_item));
             auto foreignKey = std::move(resolveForeignKey(alias != nullptr ? alias->name : _item->name));
             
@@ -67,8 +96,13 @@ namespace ultraverse::state::v2 {
     std::string StateRelationshipResolver::resolveColumnAlias(const std::string &exprName) const {
         bool found = false;
         std::string _exprName = utility::toLower(exprName);
+        std::unordered_set<std::string> visited;
         
         while (true) {
+            if (!visited.insert(_exprName).second) {
+                return std::string();
+            }
+            
             auto it = std::find_if(
                 _plan.columnAliases().begin(), _plan.columnAliases().end(),
                 [&_exprName](const auto &pair) { return std::move(utility::toLower(pair.first)) == _exprName; }
@@ -86,8 +120,13 @@ namespace ultraverse::state::v2 {
     std::string StateRelationshipResolver::resolveForeignKey(const std::string &exprName) const {
         bool found = false;
         std::string _exprName = utility::toLower(exprName);
+        std::unordered_set<std::string> visited;
         
         while (true) {
+            if (!visited.insert(_exprName).second) {
+                return std::string();
+            }
+            
             auto vec = std::move(utility::splitTableName(_exprName));
             auto tableName  = std::move(vec.first);
             auto columnName = std::move(vec.second);
@@ -95,7 +134,8 @@ namespace ultraverse::state::v2 {
             auto it = std::find_if(
                 _context.foreignKeys.cbegin(), _context.foreignKeys.cend(),
                 [&tableName, &columnName](auto &foreignKey) {
-                    return foreignKey.fromTable->getCurrentName() == tableName && columnName == foreignKey.fromColumn;
+                    return utility::toLower(foreignKey.fromTable->getCurrentName()) == tableName
+                        && utility::toLower(foreignKey.fromColumn) == columnName;
                 }
             );
             
@@ -135,7 +175,8 @@ namespace ultraverse::state::v2 {
         _rowAliasTable[name].insert(std::make_pair(range, RowAlias { alias, real }));
     }
     
-    void StateRelationshipResolver::addTransaction(Transaction &transaction) {
+    bool StateRelationshipResolver::addTransaction(Transaction &transaction) {
+        bool changed = false;
         for (const auto &pair: _plan.columnAliases()) {
             const auto &alias = pair.first;
             const auto &real = pair.second;
@@ -149,8 +190,10 @@ namespace ultraverse::state::v2 {
             if (aliasIt != itEnd && itemIt != itEnd) {
                 // std::cerr << "adding alias: " << (*aliasIt).MakeRange2().MakeWhereQuery((*aliasIt).name) << " => " << (*itemIt).MakeRange2().MakeWhereQuery((*itemIt).name) << std::endl;
                 addRowAlias(*aliasIt, *itemIt);
+                changed = true;
             }
         }
+        return changed;
     }
     
     CachedRelationshipResolver::CachedRelationshipResolver(const RelationshipResolver &resolver, int maxRowElements):
@@ -164,18 +207,18 @@ namespace ultraverse::state::v2 {
             std::shared_lock<std::shared_mutex> _lock(_cacheLock);
             auto it = _aliasCache.find(columnExpr);
             if (it != _aliasCache.end()) {
-                return std::move(it->second);
+                return it->second;
             }
         }
         
-        auto retval = std::move(_resolver.resolveColumnAlias(columnExpr));
+        auto retval = _resolver.resolveColumnAlias(columnExpr);
         
         {
             std::unique_lock<std::shared_mutex> _lock(_cacheLock);
             _aliasCache.emplace(columnExpr, retval);
         }
         
-        return std::move(retval);
+        return retval;
     }
     
     std::string CachedRelationshipResolver::resolveForeignKey(const std::string &columnExpr) const {
@@ -187,41 +230,51 @@ namespace ultraverse::state::v2 {
             std::shared_lock<std::shared_mutex> _lock(_cacheLock);
             auto it = _chainCache.find(columnExpr);
             if (it != _chainCache.end()) {
-                return std::move(it->second);
+                return it->second;
             }
         }
         
-        auto retval = std::move(_resolver.resolveChain(columnExpr));
+        auto retval = _resolver.resolveChain(columnExpr);
         
         {
             std::unique_lock<std::shared_mutex> _lock(_cacheLock);
             _chainCache.emplace(columnExpr, retval);
         }
         
-        return std::move(retval);
+        return retval;
     }
     
     std::shared_ptr<StateItem> CachedRelationshipResolver::resolveRowAlias(const StateItem &item) const {
         size_t hash = item.MakeRange2().hash();
-        auto &cacheMap = _rowAliasCache[item.name];
         
         {
             std::shared_lock<std::shared_mutex> _lock(_cacheLock);
-            auto it = cacheMap.find(hash);
-            
-            if (it == cacheMap.end()) {
-                goto NOT_FOUND;
+            auto outerIt = _rowAliasCache.find(item.name);
+            if (outerIt != _rowAliasCache.end()) {
+                auto it = outerIt->second.find(hash);
+                if (it != outerIt->second.end()) {
+                    auto cached = it->second.second;
+                    _lock.unlock();
+                    {
+                        std::unique_lock<std::shared_mutex> _writeLock(_cacheLock);
+                        auto outerIt2 = _rowAliasCache.find(item.name);
+                        if (outerIt2 != _rowAliasCache.end()) {
+                            auto it2 = outerIt2->second.find(hash);
+                            if (it2 != outerIt2->second.end()) {
+                                it2->second.first++;
+                            }
+                        }
+                    }
+                    return cached;
+                }
             }
-            
-            it->second.first++;
-            return it->second.second;
         }
         
-        NOT_FOUND:
-        auto retval = std::move(_resolver.resolveRowAlias(item));
+        auto retval = _resolver.resolveRowAlias(item);
         
         {
             std::unique_lock<std::shared_mutex> _lock(_cacheLock);
+            auto &cacheMap = _rowAliasCache[item.name];
             
             if (isGCRequired(cacheMap)) {
                 gc(cacheMap);
@@ -230,30 +283,40 @@ namespace ultraverse::state::v2 {
             cacheMap.emplace(hash, std::make_pair(1, retval));
         }
         
-        return std::move(retval);
+        return retval;
     }
     
     std::shared_ptr<StateItem> CachedRelationshipResolver::resolveRowChain(const StateItem &item) const {
         size_t hash = item.MakeRange2().hash();
-        auto &cacheMap = _rowAliasCache[item.name];
         
         {
             std::shared_lock<std::shared_mutex> _lock(_cacheLock);
-            auto it = cacheMap.find(hash);
-            
-            if (it == cacheMap.end()) {
-                goto NOT_FOUND;
+            auto outerIt = _rowChainCache.find(item.name);
+            if (outerIt != _rowChainCache.end()) {
+                auto it = outerIt->second.find(hash);
+                if (it != outerIt->second.end()) {
+                    auto cached = it->second.second;
+                    _lock.unlock();
+                    {
+                        std::unique_lock<std::shared_mutex> _writeLock(_cacheLock);
+                        auto outerIt2 = _rowChainCache.find(item.name);
+                        if (outerIt2 != _rowChainCache.end()) {
+                            auto it2 = outerIt2->second.find(hash);
+                            if (it2 != outerIt2->second.end()) {
+                                it2->second.first++;
+                            }
+                        }
+                    }
+                    return cached;
+                }
             }
-            
-            it->second.first++;
-            return it->second.second;
         }
         
-        NOT_FOUND:
-        auto retval = std::move(_resolver.resolveRowChain(item));
+        auto retval = _resolver.resolveRowChain(item);
         
         {
             std::unique_lock<std::shared_mutex> _lock(_cacheLock);
+            auto &cacheMap = _rowChainCache[item.name];
             
             if (isGCRequired(cacheMap)) {
                 gc(cacheMap);
@@ -262,7 +325,7 @@ namespace ultraverse::state::v2 {
             cacheMap.emplace(hash, std::make_pair(1, retval));
         }
         
-        return std::move(retval);
+        return retval;
     }
     
     void CachedRelationshipResolver::clearCache() {
@@ -270,6 +333,7 @@ namespace ultraverse::state::v2 {
         _aliasCache.clear();
         _chainCache.clear();
         _rowAliasCache.clear();
+        _rowChainCache.clear();
     }
     
     bool CachedRelationshipResolver::isGCRequired(const CachedRelationshipResolver::RowCacheMap &rowCacheMap) const {
