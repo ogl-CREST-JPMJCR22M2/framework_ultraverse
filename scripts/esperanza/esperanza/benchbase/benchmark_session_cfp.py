@@ -268,7 +268,8 @@ class BenchmarkSession:
         self.mysqld.start()
         time.sleep(5)
 
-        self.run_benchbase([self.bench_name, 'mariadb', self.amount, 'execute'])
+        #self.run_benchbase([self.bench_name, 'mariadb', self.amount, 'execute'])
+        self.run_benchbase([self.bench_name, 'mysql', self.amount, 'execute'])
         time.sleep(5)
 
         self.mysqld.stop()

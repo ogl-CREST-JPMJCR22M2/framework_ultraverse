@@ -1,6 +1,6 @@
 export ULTRAVERSE_HOME=/root/ultraverse/build/src  # The ultravere/build/src path for https://github.com/team-unstablers/ultraverse
-export BENCHBASE_HOME=/root/ultraverse-benchbase 
-# export APP_HOME=/root/framework_APP
+export BENCHBASE_HOME=/root/ultraverse-benchbase/target-mysql/benchbase-mysql/
+export APP_HOME=/root/framework_APP
 
 export USER=mysql
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2

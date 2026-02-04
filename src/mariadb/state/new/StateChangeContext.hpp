@@ -13,7 +13,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
-
+#include <memory>
+#include <vector>
 #include <mutex>
 
 #include "cluster/NamingHistory.hpp"

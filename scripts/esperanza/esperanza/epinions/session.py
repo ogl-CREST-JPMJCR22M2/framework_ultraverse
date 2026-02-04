@@ -73,7 +73,7 @@ class EpinionsStandaloneSession:
             development_flags = []
 
         return {
-            "binlog": {"path": ".", "indexName": "server-binlog.index"},
+            "binlog": {"path": ".", "indexName": "myserver-binlog.index"},
             "stateLog": {"path": ".", "name": "benchbase"},
             "keyColumns": key_columns,
             "columnAliases": column_aliases,
@@ -442,10 +442,10 @@ class EpinionsStandaloneSession:
             return default
 
     def _move_binlogs(self) -> None:
-        binlog_dir = Path(self.mysqld.data_path)
-        if not binlog_dir.exists():
+        binlog_dir = '/var/lib/mysql'
+        if not os.path.exists(binlog_dir):
             return
 
-        for binlog_path in binlog_dir.glob("server-binlog.*"):
+        for binlog_path in Path(binlog_dir).glob("myserver-binlog.*"):
             dest = Path(self.session_path) / binlog_path.name
             shutil.move(str(binlog_path), str(dest))

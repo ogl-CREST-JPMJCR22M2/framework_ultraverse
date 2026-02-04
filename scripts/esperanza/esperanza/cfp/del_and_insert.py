@@ -4,11 +4,8 @@ from typing import Optional
 import psycopg
 import mysql.connector
 import sys 
-import os
-import shutil
 
-#hosts = ['A', 'B', 'C']
-hosts = ['A']
+hosts = ['A', 'B', 'C']
 
 # DBのコネクションを返す
 def createConnection_p(host):
@@ -30,8 +27,8 @@ def createConnection_p(host):
 def createConnection_m(host):
     try:
         conn = mysql.connector.connect(
-            host='localhost',       # mysqlのサーバーアドレス
-            user='admin',            # mysqlのユーザーID
+            host='ubuntu'+host,       # mysqlのサーバーアドレス
+            user='deploy_user',            # mysqlのユーザーID
             password='password',    # mysqlのrootユーザーのパスワード
             port=3306,              # mysqlのポート番号
             database='offchaindb',
@@ -112,29 +109,20 @@ def execInsert_m(parameter):
             conn = createConnection_m(host)
             cur = conn.cursor()
 
-            cwd = os.getcwd()
-            temp_dir = "/tmp/dataset"
-            os.makedirs(temp_dir, exist_ok=True) 
-            os.chmod(temp_dir, 0o777)
-
             for i in range(3):
 
-                # tmpにコピーして読み込み
-                original_csv = f"{cwd}/esperanza/setting/dataset/{filename[i]}"
-                temp_csv = f"/tmp/dataset/{filename[i]}"
-                shutil.copyfile(original_csv, temp_csv)
-                os.chmod(temp_csv, 0o777)
+                infile = f"/root/framework_APP/setting/dataset/{parameter}/{filename[i]}"
 
                 sql = f"""
-                    LOAD DATA LOCAL INFILE '{temp_csv}'
+                    LOAD DATA LOCAL INFILE '{infile}'
                     INTO TABLE {host}_{tables[i]}
                     FIELDS TERMINATED BY ','
                     ENCLOSED BY '"'
                     LINES TERMINATED BY '\\r\\n'
                     IGNORE 1 ROWS;
                 """
+
                 cur.execute(sql)
-                os.remove(temp_csv)
 
             conn.commit()
 
@@ -156,7 +144,7 @@ def execInsert_p(parameter):
             conn = createConnection_p(host)
             cur = conn.cursor()
 
-            infile = f"dataset/{parameter}/hash_parts_tree.csv"
+            infile = f"/root/framework_APP/setting/dataset/{parameter}/hash_parts_tree.csv"
 
             copy_sql = f"""
                 COPY hash_parts_tree FROM STDIN WITH (FORMAT csv, HEADER true)
@@ -182,13 +170,12 @@ def execInsert_p(parameter):
 if __name__ == '__main__':
 
     execDelete_m()
-    #execDelete_p()
+    execDelete_p()
 
     args = sys.argv
 
-    #parameter = args[1] if len(args) > 1 else '0/30000/3' 
-    parameter = '0/30000/0'
+    parameter = args[1] if len(args) > 1 else '0/30000/3'  # フォルダ名に対応
 
     execInsert_m(parameter)
-    #execInsert_p(parameter)
+    execInsert_p(parameter)
     

@@ -1436,12 +1436,6 @@ private:
     bool _warnedMissingTableMap = false;
 };
 
-StateLogWriterApp application;
-
-    bool _warnedMissingRowQuery = false;
-    bool _warnedMissingTableMap = false;
-};
-
 int main(int argc, char **argv) {
     sigset_t signals;
     sigemptyset(&signals);

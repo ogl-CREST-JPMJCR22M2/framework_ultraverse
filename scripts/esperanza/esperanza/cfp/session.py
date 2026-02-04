@@ -13,33 +13,33 @@ from pathlib import Path
 
 import mysql.connector
 
+from esperanza.cfp.constants import DEFAULT_QUERY_COUNT
+#from esperanza.cfp.data_generator import CFPDataGenerator
+from esperanza.cfp.workload import CFPWorkloadExecutor
 from esperanza.mysql.mysqld import MySQLDaemon
-from esperanza.seats.constants import DEFAULT_NUM_CUSTOMERS, DEFAULT_QUERY_COUNT, NUM_AIRPORTS
-from esperanza.seats.data_generator import SeatsDataGenerator
-from esperanza.seats.workload import SeatsWorkloadExecutor
 from esperanza.utils.logger import get_logger
 
+import esperanza.cfp.del_and_insert as data_loader
+import esperanza.cfp.get_binlog as binlog_getter
 
-class SeatsStandaloneSession:
+
+class CFPStandaloneSession:
     def __init__(
         self,
         name: str,
         scale: str,
-        num_airports: int = NUM_AIRPORTS,
-        num_customers: int = DEFAULT_NUM_CUSTOMERS,
         query_count: int = DEFAULT_QUERY_COUNT,
     ) -> None:
         self.name = name
         self.scale = scale
-        self.num_airports = num_airports
-        self.num_customers = num_customers
         self.query_count = query_count
 
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.session_path = str(Path.cwd() / "runs" / f"{name}-{scale}-{timestamp}")
+        #timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        #self.session_path = str(Path.cwd() / "runs" / f"{name}-{scale}-{timestamp}")
+        self.session_path = str(Path.cwd() / "runs" / f"{name}-{scale}")
         Path(self.session_path).mkdir(parents=True, exist_ok=True)
 
-        self.logger = get_logger(f"SeatsStandaloneSession:{name}-{scale}")
+        self.logger = get_logger(f"CFPStandaloneSession:{name}-{scale}")
 
         port = int(os.getenv("DB_PORT", "3306"))
         self.mysqld = MySQLDaemon(port, os.path.join(self.session_path, "mysql"))
@@ -73,14 +73,14 @@ class SeatsStandaloneSession:
             development_flags = []
 
         return {
-            "binlog": {"path": ".", "indexName": "server-binlog.index"},
-            "stateLog": {"path": ".", "name": "benchbase"},
+            "binlog": {"path": ".", "indexName": "myserver-binlog.index"},
+            "stateLog": {"path": ".", "name": "offchaindb"},
             "keyColumns": key_columns,
             "columnAliases": column_aliases,
             "database": {
                 "host": os.environ.get("DB_HOST", "127.0.0.1"),
                 "port": int(os.environ.get("DB_PORT", "3306")),
-                "name": "benchbase",
+                "name": "offchaindb",
                 "username": os.environ.get("DB_USER", "admin"),
                 "password": os.environ.get("DB_PASS", "password"),
             },
@@ -88,7 +88,7 @@ class SeatsStandaloneSession:
                 "threadCount": 0,
                 "oneshotMode": True,
                 "procedureLogPath": "",
-                "developmentFlags": development_flags,
+                "developmentFlags": ["print-gids", "print-queries"],
             },
             "stateChange": {
                 "threadCount": 0,
@@ -129,9 +129,9 @@ class SeatsStandaloneSession:
 
         self._write_config(config)
 
-    def prepare(self) -> None:
+    def prepare(self, parameters: str) -> None:
         """Initialize MySQL, load schema/data, and take a checkpoint dump."""
-        self.logger.info("preparing Seats standalone session...")
+        self.logger.info("preparing CFP standalone session...")
 
         self.mysqld.prepare()
         time.sleep(5)
@@ -140,24 +140,38 @@ class SeatsStandaloneSession:
 
             self._create_database()
             self._execute_ddl()
-            self._load_data()
+            self._load_data(parameters)
+            #self._calculation()
 
-            self.mysqld.mysqldump("benchbase", f"{self.session_path}/dbdump.sql")
+            self.mysqld.mysqldump("offchaindb", f"{self.session_path}/dbdump.sql")
 
         self.mysqld.flush_binlogs()
 
     def execute_workload(self) -> dict:
-        """Run the SEATS workload."""
+        """Run the CFP workload."""
         conn = self._get_connection()
-        executor = SeatsWorkloadExecutor(
+        executor = CFPWorkloadExecutor(
             conn,
-            self.num_airports,
-            self.num_customers,
             self.query_count,
         )
         stats = executor.run()
         conn.close()
         return stats
+
+    def execute_update(self) -> None:
+        # ramdom_update
+        app_path = os.environ.get("APP_HOME", ".")
+        script = os.path.join(app_path, "application/ramdom_update.py")
+        result = subprocess.run(
+            ["python3", script], 
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        if result.returncode != 0:
+            output = result.stdout.decode("utf-8", errors="replace")
+            raise Exception(f"failed to execute ramdom_update: {output}")
 
     def finalize(self) -> None:
         """Finalize session artifacts after workload (mysqld should be stopped)."""
@@ -171,8 +185,6 @@ class SeatsStandaloneSession:
 
         cwd = os.getcwd()
         os.chdir(self.session_path)
-
-        self._ensure_procdefs()
 
         config = self._generate_config(
             key_columns=key_columns,
@@ -249,7 +261,7 @@ class SeatsStandaloneSession:
 
         args += [self._config_path(), action]
 
-        report_name = SeatsStandaloneSession.report_name_from_stdout(stdout_name)
+        report_name = CFPStandaloneSession.report_name_from_stdout(stdout_name)
         env = os.environ.copy()
         env["ULTRAVERSE_REPORT_NAME"] = f"{self.session_path}/{report_name}"
 
@@ -304,36 +316,10 @@ class SeatsStandaloneSession:
         if retval != 0:
             raise Exception("failed to run db_state_change: process exited with non-zero code " + str(retval))
 
-    def tablediff(
-        self,
-        table1: str,
-        table2: str,
-        columns: list[str],
-        float_columns: list[str] | None = None,
-        epsilon: float | None = None,
-    ) -> None:
+    def tablediff(self, table1: str, table2: str, columns: list[str]) -> None:
         self.logger.info(f"comparing tables '{table1}' and '{table2}'...")
 
-        float_columns_set = set(float_columns or [])
-        if epsilon is None:
-            epsilon = self._env_float("ESPERANZA_TABLEDIFF_EPS", default=1e-6)
-        if epsilon < 0:
-            epsilon = 0.0
-        eps_literal = f"{epsilon:.17g}"
-
-        if float_columns_set and epsilon > 0:
-            def _join_predicate(col: str) -> str:
-                if col in float_columns_set:
-                    return (
-                        f"((t1.`{col}` IS NULL AND t2.`{col}` IS NULL) OR "
-                        f"(t1.`{col}` IS NOT NULL AND t2.`{col}` IS NOT NULL "
-                        f"AND ABS(t1.`{col}` - t2.`{col}`) <= {eps_literal}))"
-                    )
-                return f"t1.`{col}` <=> t2.`{col}`"
-
-            join_pred = " AND ".join([_join_predicate(c) for c in columns])
-        else:
-            join_pred = " AND ".join([f"t1.`{c}` <=> t2.`{c}`" for c in columns])
+        join_pred = " AND ".join([f"t1.`{c}` <=> t2.`{c}`" for c in columns])
         show_details = self._env_truthy("ESPERANZA_TABLEDIFF_DETAILS", default=False)
         detail_limit = max(0, self._env_int("ESPERANZA_TABLEDIFF_LIMIT", 20))
 
@@ -406,41 +392,63 @@ class SeatsStandaloneSession:
     def _create_database(self) -> None:
         conn = self._get_connection(database=None)
         cursor = conn.cursor()
-        cursor.execute("DROP DATABASE IF EXISTS benchbase")
-        cursor.execute("CREATE DATABASE benchbase")
+        cursor.execute("DROP DATABASE IF EXISTS offchaindb")
+        cursor.execute("CREATE DATABASE offchaindb")
         cursor.close()
         conn.close()
 
     def _execute_ddl(self) -> None:
-        ddl_path = Path(__file__).parent.parent.parent / "seats_sql" / "ddl-mysql.sql"
-        if not ddl_path.exists():
-            raise FileNotFoundError(f"DDL file not found: {ddl_path}")
-
-        cmd = [self.mysqld.bin_for("mysql")] + self._mysql_admin_args() + ["benchbase"]
+        app_path = os.environ.get("APP_HOME", ".")
+        script = os.path.join(app_path, "setting/create_tb.py")
         result = subprocess.run(
-            cmd,
-            input=ddl_path.read_bytes(),
+            ["python3", script], 
+            check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
+
         if result.returncode != 0:
             output = result.stdout.decode("utf-8", errors="replace")
             raise Exception(f"failed to execute DDL: {output}")
 
-    def _load_data(self) -> None:
-        conn = self._get_connection()
-        generator = SeatsDataGenerator(conn, self.num_customers)
-        generator.generate_all()
-        conn.close()
+    def _load_data(self, parameters: str) -> None:
+        # del_and_insert.py
+        data_loader.execDelete_m()
+        data_loader.execDelete_p()
+        data_loader.execInsert_m(parameters)
+        data_loader.execInsert_p(parameters)
 
-    def _get_connection(self, database: str | None = "benchbase"):
+    def _calculation(self) -> None:
+        # calculation.py    
+        app_path = os.environ.get("APP_HOME", ".")
+        calc_script = os.path.join(app_path, "application/calculation.py")
+
+        try:
+            result = subprocess.run(
+                ['python3', '/root/framework_APP/application/calculation.py'],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print("--- calculation.py stdout ---")
+            print(result.stdout)
+            print("-----------------------------")
+
+        except subprocess.CalledProcessError as e:
+            print("!!!!!!!!!! CALCULATION SCRIPT ERROR !!!!!!!!!!")
+            print(f"STDOUT: {e.stdout}")
+            print(f"STDERR: {e.stderr}") 
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            raise e
+
+
+    def _get_connection(self, database: str | None = "offchaindb"):
         kwargs = {
             "host": os.getenv("DB_HOST", "127.0.0.1"),
             "port": int(os.getenv("DB_PORT", "3306")),
             "user": os.getenv("DB_USER", "admin"),
             "password": os.getenv("DB_PASS", "password"),
             "autocommit": False,
-            "consume_results": True,
         }
         if database is not None:
             kwargs["database"] = database
@@ -470,40 +478,15 @@ class SeatsStandaloneSession:
         except ValueError:
             return default
 
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        value = os.environ.get(name)
-        if value is None or value.strip() == "":
-            return default
-        try:
-            return float(value)
-        except ValueError:
-            return default
-
     def _move_binlogs(self) -> None:
-        binlog_dir = Path(self.mysqld.data_path)
-        if not binlog_dir.exists():
+        binlog_dir = '/var/lib/mysql/'
+        if not os.path.exists(binlog_dir):
+            self.logger.warning(f"Binlog directory {binlog_dir} does not exist.")
             return
 
-        for binlog_path in binlog_dir.glob("server-binlog.*"):
+        binlog_getter.main("B")
+        binlog_getter.main("C")
+
+        for binlog_path in Path(binlog_dir).glob("myserver-binlog.*"):
             dest = Path(self.session_path) / binlog_path.name
             shutil.move(str(binlog_path), str(dest))
-
-    def _ensure_procdefs(self) -> None:
-        src_dir = Path(__file__).parent.parent.parent / "procdefs" / "seats"
-        if not src_dir.exists():
-            self.logger.warning(f"procdefs not found: {src_dir}")
-            return
-
-        dst_dir = Path(self.session_path) / "procdef"
-        dst_dir.mkdir(parents=True, exist_ok=True)
-
-        copied = 0
-        for proc_path in src_dir.glob("*.sql"):
-            shutil.copy2(proc_path, dst_dir / proc_path.name)
-            copied += 1
-
-        if copied == 0:
-            self.logger.warning(f"no procdef files found in {src_dir}")
-        else:
-            self.logger.info(f"copied {copied} procdef files to {dst_dir}")

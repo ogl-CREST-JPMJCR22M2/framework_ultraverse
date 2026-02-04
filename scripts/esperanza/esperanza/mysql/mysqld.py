@@ -73,8 +73,6 @@ class MySQLDaemon:
         """
         #return subprocess.call([binary] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return subprocess.call([binary] + args, stdout=subprocess.DEVNULL)
-        #return subprocess.call([binary] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return subprocess.call([binary] + args, stdout=subprocess.DEVNULL)
 
     def __exec_nonblock__(self, binary: str, args: list[str]) -> subprocess.Popen:
         """
@@ -101,13 +99,22 @@ class MySQLDaemon:
         """
         flushes the MySQL binlogs.
         """
-
         if self.mysqld_handle is not None:
             self.logger.error("MySQL daemon is running")
             return
 
         self.logger.info("flushing MySQL binlogs...")
-        os.system(f"rm -rf {self.data_path}/server-binlog.*")
+        os.system(f"rm -rf /var/lib/mysql/myserver-binlog.*")
+
+        for h in ["ubuntuB", "ubuntuC"]:
+            result = subprocess.run(
+                f"ssh root@{h} \"mysql -u admin -ppassword -e 'RESET MASTER;'\""
+                , shell=True
+            )
+
+            if result.returncode != 0:
+                self.logger.error(f"Failed to reset master on {h}")
+                return
 
     def mysqldump(self, database: str, output: str):
         """
@@ -179,10 +186,9 @@ class MySQLDaemon:
             "-h127.0.0.1",
             f"--port={self.port}",
             "-uroot",
-            "--skip-password",
-            "-e", "ALTER USER 'root'@'localhost' IDENTIFIED BY 'password';"
+            "-ppassword",
+            "-e", "DROP DATABASE IF EXISTS benchbase;"
                   "CREATE DATABASE benchbase;"
-                  "FLUSH PRIVILEGES;"
         ])
 
         if retval != 0:

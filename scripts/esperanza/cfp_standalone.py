@@ -1,37 +1,38 @@
 import os
 import time
+import subprocess
 
-from esperanza.tpcc.session import TPCCStandaloneSession
+from esperanza.cfp.session import CFPStandaloneSession
 from esperanza.utils.download_mysql import download_mysql, get_mysql_bin_path
 from esperanza.utils.state_change_report import read_state_change_report
 
 KEY_COLUMNS = [
-    'warehouse.w_id',
-    'customer.c_w_id',
-    'stocks.s_w_id',
-    'order_line.ol_w_id',
-    'district.d_w_id',
-    'order.o_w_id',
-    'history.h_c_w_id',
-    'item.i_id'
+    "a_cfpval.partid",
+    "a_parts_tree.partid+a_parts_tree.parents_partid",
+    "b_cfpval.partid",
+    "b_parts_tree.partid+b_parts_tree.parents_partid",
+    "c_cfpval.partid",
+    "c_parts_tree.partid+c_parts_tree.parents_partid"
 ]
 BACKUP_FILE = "dbdump.sql"
 COLUMN_ALIASES: dict[str, list[str]] = {}
 
 DB_TABLE_DIFF_OPTIONS = {
-    "warehouse": ["w_id", "w_ytd", "w_tax", "w_name", "w_street_1", "w_street_2", "w_city", "w_state", "w_zip"],
-    "item": ["i_id", "i_name", "i_price", "i_data", "i_im_id"],
-    "stock": ["s_w_id", "s_i_id", "s_quantity", "s_ytd", "s_order_cnt", "s_remote_cnt", "s_data", "s_dist_01", "s_dist_02", "s_dist_03", "s_dist_04", "s_dist_05", "s_dist_06", "s_dist_07", "s_dist_08", "s_dist_09", "s_dist_10"],
-    "district": ["d_w_id", "d_id", "d_ytd", "d_tax", "d_next_o_id", "d_name", "d_street_1", "d_street_2", "d_city", "d_state", "d_zip"],
-    "customer": ["c_w_id", "c_d_id", "c_id", "c_discount", "c_credit", "c_last", "c_first", "c_credit_lim", "c_balance", "c_ytd_payment", "c_payment_cnt", "c_delivery_cnt", "c_street_1", "c_street_2", "c_city", "c_state", "c_zip", "c_phone", "c_since", "c_middle", "c_data"],
-    "history": ["h_c_id", "h_c_d_id", "h_c_w_id", "h_d_id", "h_w_id", "h_date", "h_amount", "h_data"],
-    "oorder": ["o_w_id", "o_d_id", "o_id", "o_c_id", "o_carrier_id", "o_ol_cnt", "o_all_local", "o_entry_d"],
-    "new_order": ["no_w_id", "no_d_id", "no_o_id"],
-    "order_line": ["ol_w_id", "ol_d_id", "ol_o_id", "ol_number", "ol_i_id", "ol_delivery_d", "ol_amount", "ol_supply_w_id", "ol_quantity", "ol_dist_info"],
+    "a_cfpval": ["partid", "cfp", "co2"],
+    "a_parts_tree": ["partid", "parents_partid", "qty"],
+    "a_assembler": ["partid", "assembler"],
+    "b_cfpval": ["partid", "cfp", "co2"],
+    "b_parts_tree": ["partid", "parents_partid", "qty"], 
+    "b_assembler": ["partid", "assembler"],
+    "c_cfpval": ["partid", "cfp", "co2"],
+    "c_parts_tree": ["partid", "parents_partid", "qty"],
+    "c_assembler": ["partid", "assembler"],
 }
 
+DEVELOPMENT_FLAGS = ["print-gids", "print-queries"]
 
-def decide_rollback_gids(session: TPCCStandaloneSession, ratio: float) -> list[int]:
+
+def decide_rollback_gids(session: CFPStandaloneSession, ratio: float) -> list[int]:
     ratio = max(min(ratio, 1.0), 0.0)
 
     if ratio == 0.0:
@@ -53,7 +54,7 @@ def decide_rollback_gids(session: TPCCStandaloneSession, ratio: float) -> list[i
 
 
 def perform_state_change(
-    session: TPCCStandaloneSession,
+    session: CFPStandaloneSession,
     rollback_gids: list[int],
     do_extra_replay_st: bool = False,
     do_table_diff: bool = False,
@@ -131,7 +132,7 @@ def perform_state_change(
             )
 
 
-def perform_full_replay(session: TPCCStandaloneSession) -> None:
+def perform_full_replay(session: CFPStandaloneSession) -> None:
     logger = session.logger
 
     full_replay_log_name = "full_replay"
@@ -163,10 +164,15 @@ if __name__ == "__main__":
     os.putenv("DB_USER", "admin")
     os.putenv("DB_PASS", "password")
 
-    session = TPCCStandaloneSession("tpcc_standalone", "1m", scale_factor=1, query_count=92000)
+    session = CFPStandaloneSession(
+        "cfp_standalone",
+        "1m",
+        query_count=10000,
+    )
     logger = session.logger
 
-    session.prepare()
+    parameters = '0/3000/0'
+    session.prepare(parameters)
 
     logger.info("Starting mysqld for workload...")
     with session.mysqld.start():
@@ -174,23 +180,32 @@ if __name__ == "__main__":
 
         logger.info("Executing workload...")
         stats = session.execute_workload()
-        logger.info(f"Workload stats: {stats}")
+        #logger.info(f"Workload stats: {stats}")
 
-        logger.info("dumping latest database...")
-        session.mysqld.mysqldump("benchbase", f"{session.session_path}/dbdump_latest.sql")
+        #logger.info("dumping latest database...")
+        #session.mysqld.mysqldump("benchbase", f"{session.session_path}/dbdump_latest.sql")
 
         logger.info("stopping mysqld...")
 
     session.finalize()
 
-    session.run_statelogd(key_columns=KEY_COLUMNS)
+    session.run_statelogd(key_columns=KEY_COLUMNS, development_flags=DEVELOPMENT_FLAGS)
     session.update_config(backup_file=BACKUP_FILE, column_aliases=COLUMN_ALIASES)
 
     logger.info("Starting mysqld for state change...")
     with session.mysqld.start():
         time.sleep(10)
 
+        logger.info("creating cluster...")
         session.run_db_state_change("make_cluster")
-        perform_state_change(session, [0], do_extra_replay_st=True, do_table_diff=True)
+        perform_state_change(session, [1000], do_extra_replay_st=False, do_table_diff=False)
+
+        #rollback_gids = decide_rollback_gids(session, 0.01)
+        #perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=True)
+
+        #rollback_gids = decide_rollback_gids(session, 0.1)
+        #perform_state_change(session, rollback_gids, do_extra_replay_st=True, do_table_diff=True)
+
+        #perform_full_replay(session)
 
         logger.info("stopping mysqld...")
